@@ -376,14 +376,9 @@ func Encode(out io.Writer, key *TPMKey) error {
 }
 
 func Decode(b []byte) (*TPMKey, error) {
-	block, _ := pem.Decode(b)
-	if block == nil {
-		return nil, fmt.Errorf("not an armored key")
+	bundle, err := DecodeBundle(b)
+	if err != nil {
+		return nil, err
 	}
-	switch block.Type {
-	case pemType:
-		return Parse(block.Bytes)
-	default:
-		return nil, ErrNotTPMKey
-	}
+	return bundle.Single()
 }
