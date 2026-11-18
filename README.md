@@ -6,6 +6,27 @@ Implements the ASN.1 Specification for TPM 2.0 Key Files.
 https://www.hansenpartnership.com/draft-bottomley-tpm2-keys.html
 
 
+# Auth Policies
+
+A key file can carry several authorization policies in `AuthPolicy`, each a
+named set of `TPMPolicy` items. The identity of a policy set is its TPM
+policy hash: starting from the all-zero SHA-256 digest, every item extends
+it as `SHA-256(digest || commandCode || commandPolicy)`, mirroring how a
+TPM extends `policyDigest`. Two sets share an authorization path if and
+only if their identities are equal — sets with the same command codes but
+different digests are distinct.
+
+`TPMKey.SelectAuthPolicy` selects a policy set by identity, never by slice
+position, and fails closed:
+
+- An empty name selects the sole policy set of the key; with several sets
+  the selection is ambiguous and returns `ErrAmbiguousAuthPolicy`.
+- Duplicated names are only accepted when every match is identical;
+  distinct sets sharing a name return `ErrAmbiguousAuthPolicy`.
+- Empty policy sets return `ErrEmptyAuthPolicy`.
+- Keys without `AuthPolicy` fall back to the legacy `Policy` field (or no
+  policy at all), keeping old key files working.
+
 # Loadable Keys
 
 ## With NewLoadableKey

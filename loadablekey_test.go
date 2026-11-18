@@ -1,14 +1,106 @@
 package keyfile
 
 import (
+	"bytes"
 	"crypto"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 )
+
+func policyFileFixture(t *testing.T, path string) []*TPMPolicy {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed reading policy file: %v", err)
+	}
+	var policies []*TPMPolicy
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		raw, err := hex.DecodeString(strings.TrimSpace(line))
+		if err != nil {
+			t.Fatalf("failed decoding policy line: %v", err)
+		}
+		policies = append(policies, &TPMPolicy{
+			CommandCode:   int(binary.BigEndian.Uint32(raw[:4])),
+			CommandPolicy: raw[4:],
+		})
+	}
+	return policies
+}
+
+func TestLoadableKeyWithAuthPolicy(t *testing.T) {
+	tpm, err := simulator.OpenSimulator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpm.Close()
+
+	policies := policyFileFixture(t, "./testdata/policy.txt")
+
+	key, err := NewLoadableKey(tpm, tpm2.TPMAlgECC, 256, []byte{},
+		WithDescription("policy key"),
+		WithAuthPolicy([]*TPMAuthPolicy{
+			{Name: "pcr", Policy: policies},
+			{Name: "authvalue", Policy: policies[1:]},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("failed creating loadable key: %v", err)
+	}
+
+	// Round-trip the key through the on-disk encoding.
+	decoded, err := Decode(key.Bytes())
+	if err != nil {
+		t.Fatalf("failed decoding key: %v", err)
+	}
+
+	selected, err := decoded.SelectAuthPolicy("pcr")
+	if err != nil {
+		t.Fatalf("failed selecting auth policy: %v", err)
+	}
+	wantDigest, err := key.AuthPolicy[0].Digest()
+	if err != nil {
+		t.Fatalf("failed computing digest: %v", err)
+	}
+	gotDigest, err := selected.Digest()
+	if err != nil {
+		t.Fatalf("failed computing digest: %v", err)
+	}
+	if !bytes.Equal(wantDigest, gotDigest) {
+		t.Fatalf("selected policy identity changed across round-trip")
+	}
+
+	if _, err := decoded.SelectAuthPolicy(""); !errors.Is(err, ErrAmbiguousAuthPolicy) {
+		t.Fatalf("expected ambiguous selection, got %v", err)
+	}
+
+	signer, err := decoded.Signer(tpm, []byte(""), []byte(""))
+	if err != nil {
+		t.Fatalf("couldn't create signer: %v", err)
+	}
+
+	h := crypto.SHA256.New()
+	h.Write([]byte("heyho"))
+	b := h.Sum(nil)
+
+	sig, err := signer.Sign((io.Reader)(nil), b[:], crypto.SHA256)
+	if err != nil {
+		t.Fatalf("failed signing: %v", err)
+	}
+
+	ok, err := decoded.Verify(crypto.SHA256, b[:], sig)
+	if !ok || err != nil {
+		t.Fatalf("invalid signature")
+	}
+}
 
 func TestNewLoadableKey(t *testing.T) {
 	tpm, err := simulator.OpenSimulator()
