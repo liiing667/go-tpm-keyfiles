@@ -20,6 +20,9 @@ func NewLoadableKey(tpm transport.TPMCloser, alg tpm2.TPMAlgID, bits int, ownera
 func NewLoadableKeyWithResponse(tpm transport.TPMCloser, alg tpm2.TPMAlgID, bits int, ownerauth []byte, fn ...TPMKeyOption) (*TPMKey, *tpm2.CreateResponse, error) {
 	sess := NewTPMSession(tpm)
 	key := NewTPMKey(OIDLoadableKey, tpm2.TPM2BPublic{}, tpm2.TPM2BPrivate{}, fn...)
+	if err := key.Validate(); err != nil {
+		return nil, nil, err
+	}
 
 	parenthandle, err := GetParentHandle(sess, key.Parent, ownerauth)
 	if err != nil {

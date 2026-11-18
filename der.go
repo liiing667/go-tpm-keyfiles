@@ -271,10 +271,23 @@ func Parse(b []byte) (*TPMKey, error) {
 	}
 	tkey.Privkey = *private
 
+	// The parsed key must describe an authentication state the file
+	// format can actually express.
+	if err := tkey.Validate(); err != nil {
+		return nil, err
+	}
+
 	return &tkey, nil
 }
 
-func Marshal(key *TPMKey) []byte {
+// Marshal serializes the TPMKey to DER. It refuses to serialize keys whose
+// authentication state cannot be expressed in the file format, see
+// TPMKey.Validate.
+func Marshal(key *TPMKey) ([]byte, error) {
+	if err := key.Validate(); err != nil {
+		return nil, err
+	}
+
 	var b cryptobyte.Builder
 
 	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
@@ -356,7 +369,7 @@ func Marshal(key *TPMKey) []byte {
 		b.AddASN1OctetString(tpm2.Marshal(key.Privkey))
 	})
 
-	return b.BytesOrPanic()
+	return b.BytesOrPanic(), nil
 }
 
 // Errors
@@ -369,9 +382,13 @@ var (
 )
 
 func Encode(out io.Writer, key *TPMKey) error {
+	b, err := Marshal(key)
+	if err != nil {
+		return err
+	}
 	return pem.Encode(out, &pem.Block{
 		Type:  pemType,
-		Bytes: Marshal(key),
+		Bytes: b,
 	})
 }
 

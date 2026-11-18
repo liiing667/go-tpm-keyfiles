@@ -26,6 +26,10 @@ func WithSecret(secret tpm2.TPM2BEncryptedSecret) TPMKeyOption {
 	}
 }
 
+// WithUserAuth sets the auth value of the key. A nil or empty userauth
+// marks the key as emptyAuth; a non-empty userauth clears emptyAuth and
+// keeps the value in memory for key creation. The value itself is never
+// serialized to the file, only the resulting emptyAuth boolean is.
 func WithUserAuth(userauth []byte) TPMKeyOption {
 	return func(key *TPMKey) {
 		key.EmptyAuth = true

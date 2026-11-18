@@ -64,6 +64,9 @@ func makeSealedBlob(pk any, userauth []byte) (*tpm2.TPMTPublic, []byte, error) {
 
 func NewImportablekey(rempub *tpm2.TPMTPublic, pk any, fn ...TPMKeyOption) (*TPMKey, error) {
 	key := NewTPMKey(OIDImportableKey, tpm2.TPM2BPublic{}, tpm2.TPM2BPrivate{}, fn...)
+	if err := key.Validate(); err != nil {
+		return nil, err
+	}
 
 	pub, sensitive, err := makeSealedBlob(pk, key.userAuth)
 	if err != nil {

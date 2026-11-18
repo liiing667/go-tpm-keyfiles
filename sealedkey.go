@@ -10,6 +10,9 @@ import (
 func NewSealedData(tpm transport.TPMCloser, data []byte, ownerauth []byte, fn ...TPMKeyOption) (*TPMKey, error) {
 	sess := NewTPMSession(tpm)
 	key := NewTPMKey(OIDSealedKey, tpm2.TPM2BPublic{}, tpm2.TPM2BPrivate{}, fn...)
+	if err := key.Validate(); err != nil {
+		return nil, err
+	}
 	parenthandle, err := GetParentHandle(sess, key.Parent, ownerauth)
 	if err != nil {
 		return nil, err

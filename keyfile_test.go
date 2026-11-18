@@ -65,6 +65,99 @@ func must2BPrivate(data []byte) tpm2.TPM2BPrivate {
 	}
 }
 
+// forceEmptyAuth is a TPMKeyOption that forces the emptyAuth bit,
+// simulating a caller overriding the auth state set by WithUserAuth.
+func forceEmptyAuth(key *TPMKey) {
+	key.EmptyAuth = true
+}
+
+// A key carrying a user auth value while claiming emptyAuth cannot be
+// expressed in the file format: only the boolean would survive the
+// roundtrip and the reloaded key would look like it needs no password.
+// Construction, serialization and loading must all reject this state.
+func TestContradictoryAuthState(t *testing.T) {
+	newContradictoryKey := func() *TPMKey {
+		return NewTPMKey(OIDLoadableKey,
+			tpm2.New2B(tpm2.ECCSRKTemplate),
+			must2BPrivate([]byte("some data")),
+			WithUserAuth([]byte("secret")),
+			forceEmptyAuth,
+		)
+	}
+
+	if err := newContradictoryKey().Validate(); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("Validate should fail with ErrAuthContradiction, got: %v", err)
+	}
+
+	if _, err := Marshal(newContradictoryKey()); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("Marshal should fail with ErrAuthContradiction, got: %v", err)
+	}
+
+	if err := Encode(io.Discard, newContradictoryKey()); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("Encode should fail with ErrAuthContradiction, got: %v", err)
+	}
+
+	if b := newContradictoryKey().Bytes(); b != nil {
+		t.Fatalf("Bytes should return nil for a contradictory key")
+	}
+
+	// Constructors must reject the contradiction before touching the TPM.
+	if _, err := NewImportablekey(nil, nil,
+		WithUserAuth([]byte("secret")), forceEmptyAuth,
+	); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("NewImportablekey should fail with ErrAuthContradiction, got: %v", err)
+	}
+
+	if _, err := NewSealedData(nil, []byte("data"), nil,
+		WithUserAuth([]byte("secret")), forceEmptyAuth,
+	); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("NewSealedData should fail with ErrAuthContradiction, got: %v", err)
+	}
+
+	if _, err := NewLoadableKey(nil, tpm2.TPMAlgECC, 256, nil,
+		WithUserAuth([]byte("secret")), forceEmptyAuth,
+	); !errors.Is(err, ErrAuthContradiction) {
+		t.Fatalf("NewLoadableKey should fail with ErrAuthContradiction, got: %v", err)
+	}
+}
+
+// The file format can only express the emptyAuth boolean. A key with a
+// user auth value roundtrips as "auth required, value unknown", and a key
+// without auth roundtrips as emptyAuth.
+func TestAuthRoundtrip(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		userauth []byte
+		hasAuth  bool
+	}{
+		{name: "no auth", userauth: nil, hasAuth: false},
+		{name: "empty auth", userauth: []byte(""), hasAuth: false},
+		{name: "with auth", userauth: []byte("secret"), hasAuth: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			key := NewTPMKey(OIDLoadableKey,
+				tpm2.New2B(tpm2.ECCSRKTemplate),
+				must2BPrivate([]byte("some data")),
+				WithUserAuth(tt.userauth),
+			)
+			if err := key.Validate(); err != nil {
+				t.Fatalf("failed validating key: %v", err)
+			}
+
+			parsed, err := Decode(key.Bytes())
+			if err != nil {
+				t.Fatalf("failed decoding key: %v", err)
+			}
+			if err := parsed.Validate(); err != nil {
+				t.Fatalf("parsed key should be valid: %v", err)
+			}
+			if parsed.HasAuth() != tt.hasAuth {
+				t.Fatalf("parsed key HasAuth() = %v, want %v", parsed.HasAuth(), tt.hasAuth)
+			}
+		})
+	}
+}
+
 func TestEncodeDecode(t *testing.T) {
 	for n, tt := range []struct {
 		*TPMKey

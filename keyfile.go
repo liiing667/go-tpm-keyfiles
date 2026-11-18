@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	encasn1 "encoding/asn1"
+	"errors"
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
@@ -23,7 +24,10 @@ type TPMAuthPolicy struct {
 }
 
 type TPMKey struct {
-	Keytype     encasn1.ObjectIdentifier
+	Keytype encasn1.ObjectIdentifier
+	// EmptyAuth records whether the key can be used without an auth
+	// value. It is the only authentication fact the file format can
+	// express.
 	EmptyAuth   bool
 	Policy      []*TPMPolicy
 	Secret      tpm2.TPM2BEncryptedSecret
@@ -32,7 +36,33 @@ type TPMKey struct {
 	Parent      tpm2.TPMHandle
 	Pubkey      tpm2.TPM2BPublic
 	Privkey     tpm2.TPM2BPrivate
-	userAuth    []byte // Internal detail
+	// userAuth is the auth value of the key. It is an internal,
+	// in-memory-only detail: the file format cannot store it, so it is
+	// never serialized. After Parse it is always nil and only EmptyAuth
+	// tells whether the key expects an auth value.
+	userAuth []byte
+}
+
+// ErrAuthContradiction is returned when a TPMKey carries a user auth value
+// while also claiming emptyAuth. The file format can only record the
+// emptyAuth boolean, so serializing such a key would silently drop the auth
+// value and the reloaded key would incorrectly look like it needs no
+// password.
+var ErrAuthContradiction = errors.New("keyfile: emptyAuth is set but a user auth value is present")
+
+// Validate checks that the in-memory authentication state of the key is
+// expressible in the file format.
+//
+// The file format can only record whether a key has an empty auth value
+// (the emptyAuth boolean); it cannot store the auth value itself. A key
+// with EmptyAuth == false and no userAuth is valid: that is exactly the
+// state of a parsed password-protected key, where the auth value is
+// unknown and must be supplied by the caller.
+func (t *TPMKey) Validate() error {
+	if t.EmptyAuth && len(t.userAuth) != 0 {
+		return ErrAuthContradiction
+	}
+	return nil
 }
 
 func NewTPMKey(oid encasn1.ObjectIdentifier, pubkey tpm2.TPM2BPublic, privkey tpm2.TPM2BPrivate, fn ...TPMKeyOption) *TPMKey {
@@ -75,6 +105,9 @@ func (t *TPMKey) HasSigner() bool {
 	return t.contents().ObjectAttributes.SignEncrypt
 }
 
+// HasAuth reports whether the key requires an auth value. Note that this
+// only reflects the emptyAuth boolean stored in the file; the auth value
+// itself is not recoverable from a parsed key.
 func (t *TPMKey) HasAuth() bool {
 	return !t.EmptyAuth
 }
